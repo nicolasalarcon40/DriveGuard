@@ -1,0 +1,16 @@
+# Copia este archivo a "terraform.tfvars" (sin el .example) y completa tus
+# valores reales. terraform.tfvars está en .gitignore a propósito — nunca
+# subas tu connection string de Neon a un repo público.
+
+# Debe ser único a nivel GLOBAL en AWS (nombra el bucket S3). Usa algo con
+# tu nombre para evitar choques con buckets de otras personas.
+project_name = "driveguard-nicolasalarcon"
+
+# El connection string que te da Neon al crear el proyecto/base de datos.
+# Asegúrate de que termine en "?sslmode=require".
+database_url = "postgresql://usuario:password@ep-xxxx.us-east-2.aws.neon.tech/fleet_telemetry?sslmode=require"
+
+# Déjalo así para desplegar contra AWS real (el default ya es "false" en
+# variables.tf, pero se deja explícito acá para que quede claro qué está
+# pasando cuando abras este archivo).
+use_localstack = false

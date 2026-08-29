@@ -1,0 +1,67 @@
+version: "3.8"
+
+# Stack local que emula los servicios de AWS que usaríamos en producción.
+# LocalStack expone la MISMA API que AWS real (S3, Lambda, DynamoDB, SNS),
+# así que el código escrito contra esta stack funciona igual contra AWS real
+# simplemente cambiando el endpoint y las credenciales.
+
+services:
+  localstack:
+    container_name: obd2-localstack
+    image: localstack/localstack:3.4
+    ports:
+      - "4566:4566"       # Edge port: todos los servicios de AWS quedan aquí
+      - "4510-4559:4510-4559"
+    environment:
+      - SERVICES=s3,lambda,dynamodb,sns,iam,logs,cloudwatch
+      - DEBUG=0
+      - PERSISTENCE=1
+      - LAMBDA_EXECUTOR=docker-reuse
+      - DOCKER_HOST=unix:///var/run/docker.sock
+      - AWS_DEFAULT_REGION=us-east-1
+    volumes:
+      - "./.localstack:/var/lib/localstack"
+      - "/var/run/docker.sock:/var/run/docker.sock"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:4566/_localstack/health"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  postgres:
+    container_name: obd2-postgres
+    image: postgres:16-alpine
+    ports:
+      - "5432:5432"
+    environment:
+      - POSTGRES_USER=obd2
+      - POSTGRES_PASSWORD=obd2pass
+      - POSTGRES_DB=fleet_telemetry
+    volumes:
+      - "./.pgdata:/var/lib/postgresql/data"
+      - "./src/db/schema.sql:/docker-entrypoint-initdb.d/01_schema.sql"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U obd2 -d fleet_telemetry"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  dashboard:
+    container_name: obd2-dashboard
+    build:
+      context: .
+      dockerfile: src/dashboard/Dockerfile
+    ports:
+      - "8501:8501"
+    environment:
+      - DATABASE_URL=postgresql://obd2:obd2pass@postgres:5432/fleet_telemetry
+    depends_on:
+      postgres:
+        condition: service_healthy
+    # Nota: sin bind mount a propósito. app.py hace
+    # `sys.path.insert(0, .../parents[2])` para poder importar
+    # `src.common.*`, así que necesita el repo COMPLETO tal como quedó
+    # copiado en la imagen (ver src/dashboard/Dockerfile) — montar solo
+    # "./src/dashboard" encima rompería esos imports. Para desarrollo con
+    # hot-reload, corre `streamlit run src/dashboard/app.py` directo en tu
+    # máquina en vez de por Docker.

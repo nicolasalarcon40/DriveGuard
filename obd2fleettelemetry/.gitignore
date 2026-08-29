@@ -1,0 +1,36 @@
+# Entornos virtuales
+venv/
+.venv/
+__pycache__/
+*.pyc
+
+# Configuración local (secretos/endpoints — cada quien tiene su propio .env)
+.env
+
+# Datos generados en runtime (viajes simulados/capturados, "S3"/"DynamoDB"/"SNS" locales)
+data/
+
+# Terraform
+infra/.terraform/
+infra/build/
+infra/*.tfstate
+infra/*.tfstate.*
+infra/.terraform.lock.hcl
+infra/crash.log
+infra/terraform.tfvars     # contiene tu DATABASE_URL de Neon — nunca a git
+infra/layer/                # binario vendored de psycopg2 — se regenera, no se versiona
+
+# LocalStack / Postgres (volúmenes de docker-compose)
+.localstack/
+.pgdata/
+
+# Tests / cobertura
+.pytest_cache/
+pytest-report.xml
+.coverage
+htmlcov/
+
+# Editor / SO
+.vscode/
+.idea/
+.DS_Store

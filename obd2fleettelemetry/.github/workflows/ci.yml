@@ -1,0 +1,113 @@
+name: CI
+
+# Corre en cada push y pull request. A propósito NO depende de Docker ni de
+# LocalStack: los tests unitarios (risk_rules, storage, simulator) no
+# necesitan nada externo, y el test de integración end-to-end
+# (tests/test_lambda_integration.py) solo necesita Postgres — que GitHub
+# Actions puede levantar como "service container" nativo, sin Docker Hub de
+# por medio salvo por la imagen oficial de postgres, que SÍ está disponible
+# aquí (a diferencia del sandbox de desarrollo usado para construir este
+# proyecto, donde Docker Hub estaba bloqueado — ver README).
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: obd2
+          POSTGRES_PASSWORD: obd2pass
+          POSTGRES_DB: fleet_telemetry
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U obd2 -d fleet_telemetry"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      DEPLOYMENT_MODE: local
+      DATABASE_URL: postgresql://obd2:obd2pass@localhost:5432/fleet_telemetry
+      RISK_ALERT_THRESHOLD: "70"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: Instalar dependencias
+        run: |
+          python -m pip install --upgrade pip
+          # python-obd requiere pyserial con acceso a hardware real; no hace
+          # falta para CI (solo lo usa src/obd2_capture/capture_real.py), así
+          # que se instala todo lo demás explícitamente en vez de fallar el
+          # build completo si esa dependencia diera problemas en el runner.
+          pip install -r requirements.txt
+
+      - name: Aplicar esquema de base de datos
+        run: |
+          PGPASSWORD=obd2pass psql -h localhost -U obd2 -d fleet_telemetry -f src/db/schema.sql
+
+      - name: Lint (compileall)
+        run: python -m compileall -q src tests
+
+      - name: Correr tests
+        run: python -m pytest -v --junitxml=pytest-report.xml
+
+      - name: Publicar resultados de tests
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pytest-report
+          path: pytest-report.xml
+
+  terraform-validate:
+    runs-on: ubuntu-latest
+    # Job separado y no-bloqueante: valida que el código de Terraform (infra/)
+    # sea sintácticamente correcto, sin necesitar credenciales de AWS reales
+    # ni LocalStack corriendo (terraform validate no llama a ningún proveedor).
+    env:
+      # infra/main.tf declara var.database_url sin default a propósito (para
+      # que nunca quede un secreto commiteado) — validate no necesita un
+      # valor real, pero si tu versión de Terraform lo exige igual, este
+      # placeholder evita que el job falle por eso.
+      TF_VAR_database_url: "postgresql://user:pass@localhost:5432/placeholder"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Placeholder del Lambda Layer de psycopg2
+        # infra/layer/ está en .gitignore (es un binario vendored, se
+        # regenera, no se versiona — ver infra/main.tf) así que no existe
+        # tras el checkout. Un placeholder vacío es suficiente para que
+        # terraform init/validate no truene por un directorio inexistente;
+        # no hace falta el psycopg2 real solo para validar sintaxis.
+        run: mkdir -p infra/layer/python
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_wrapper: false
+
+      - name: terraform fmt -check
+        working-directory: infra
+        run: terraform fmt -check -recursive
+
+      - name: terraform init (sin backend remoto)
+        working-directory: infra
+        run: terraform init -backend=false
+
+      - name: terraform validate
+        working-directory: infra
+        run: terraform validate
