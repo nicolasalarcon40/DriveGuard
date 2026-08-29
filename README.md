@@ -1,12 +1,10 @@
-# 🚚 Fleet Risk Telemetry — Detección de Conducción Riesgosa con OBD2
+# 🚚 DriveGuard — Telemetría de Flota y Detección de Conducción Riesgosa con OBD2
 
 Pipeline de datos end-to-end que captura telemetría de un vehículo en tiempo real (RPM, velocidad, temperatura del motor y GPS) desde un dispositivo **OBD2 real**, detecta patrones de conducción riesgosa (frenadas bruscas, aceleraciones agresivas, sobre-revolución, sobrecalentamiento), calcula un puntaje de riesgo por conductor y dispara alertas automáticas cuando se supera un umbral — todo visible en un dashboard en tiempo real.
 
 Arquitectura pensada para AWS (S3 + Lambda + RDS/DynamoDB + SNS), con una capa de adaptadores que permite correr **exactamente la misma lógica de negocio 100% en local**, sin necesitar una cuenta de AWS ni Docker, para desarrollar y probar el pipeline completo desde cero.
 
-[![CI](https://github.com/TU_USUARIO/TU_REPO/actions/workflows/ci.yml/badge.svg)](https://github.com/TU_USUARIO/TU_REPO/actions/workflows/ci.yml)
-
-> Reemplaza `TU_USUARIO/TU_REPO` en el badge de arriba por la ruta real una vez que subas este repo a GitHub — el pipeline de CI (tests + validación de Terraform) corre automáticamente en cada push.
+[![CI](https://github.com/nicolasalarcon40/DriveGuard/actions/workflows/ci.yml/badge.svg)](https://github.com/nicolasalarcon40/DriveGuard/actions/workflows/ci.yml)
 
 ---
 
@@ -107,7 +105,7 @@ La Lambda (`src/processing/lambda_function.py`) **nunca sabe cuál de los dos mo
 ## Estructura del repo
 
 ```
-obd2-fleet-telemetry/
+DriveGuard/
 ├── src/
 │   ├── obd2_capture/     # captura desde hardware OBD2 real
 │   ├── simulator/        # generador de viajes sintéticos
@@ -129,8 +127,8 @@ obd2-fleet-telemetry/
 Requisitos: Python 3.12, Postgres corriendo en algún lado (local, Docker, o el `postgres` nativo de tu SO).
 
 ```bash
-git clone <este-repo>
-cd obd2-fleet-telemetry
+git clone https://github.com/nicolasalarcon40/DriveGuard.git
+cd DriveGuard
 
 python3 -m venv venv && source venv/bin/activate
 pip install -r requirements.txt
