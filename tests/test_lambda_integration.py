@@ -23,6 +23,7 @@ from datetime import datetime, timedelta, timezone
 import psycopg2
 import pytest
 
+from src.common import db
 from src.common.config import settings
 from src.common.storage import LocalObjectStore
 from src.processing.lambda_function import handler
@@ -108,6 +109,29 @@ def _build_trip(trip_id: str, n_harsh_braking_events: int) -> dict:
         "sample_rate_hz": 1,
         "samples": samples,
     }
+
+
+def test_get_truck_returns_native_numeric_types_not_decimal():
+    """Regresión de un bug real encontrado en producción: psycopg2 devuelve
+    las columnas NUMERIC como decimal.Decimal, que no se puede dividir con
+    un float de Python (TypeError). risk_rules.py opera con floats
+    nativos, así que get_truck() debe normalizar el tipo antes de devolver
+    el perfil del vehículo. El bug pasó desapercibido en los tests
+    unitarios de risk_rules.py porque ahí siempre se pasan floats a mano;
+    solo se manifestaba leyendo un vehículo real desde Postgres."""
+    conn = psycopg2.connect(settings.database_url)
+    try:
+        vehicle = db.get_truck(conn, "TRK-01")
+    finally:
+        conn.close()
+
+    assert vehicle is not None
+    assert isinstance(vehicle["max_rpm_normal"], int)
+    assert isinstance(vehicle["max_speed_kmh"], float)
+    assert isinstance(vehicle["rpm_per_kmh_min"], float)
+    assert isinstance(vehicle["rpm_per_kmh_max"], float)
+    # Esto es justo lo que provocaba el TypeError en producción.
+    _ = 120.0 / vehicle["max_speed_kmh"]
 
 
 def test_pipeline_persists_trip_and_detected_events_to_postgres():

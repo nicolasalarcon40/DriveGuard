@@ -46,7 +46,19 @@ def get_truck(conn, truck_id: str) -> dict | None:
             (truck_id,),
         )
         row = cur.fetchone()
-    return dict(row) if row else None
+    if not row:
+        return None
+    # psycopg2 devuelve las columnas NUMERIC como decimal.Decimal (para
+    # precisión exacta), pero risk_rules.py está escrito para trabajar con
+    # floats normales de Python — dividir un float entre un Decimal lanza
+    # TypeError. Se normaliza acá, en la frontera con la base de datos, en
+    # vez de ensuciar la lógica de negocio con conversiones de tipo.
+    return {
+        "max_rpm_normal": int(row["max_rpm_normal"]),
+        "max_speed_kmh": float(row["max_speed_kmh"]),
+        "rpm_per_kmh_min": float(row["rpm_per_kmh_min"]),
+        "rpm_per_kmh_max": float(row["rpm_per_kmh_max"]),
+    }
 
 
 def ensure_driver(conn, driver_id: str, driver_name: str, truck_id: str):
