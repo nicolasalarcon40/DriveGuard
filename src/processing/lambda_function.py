@@ -104,13 +104,18 @@ def process_trip_object(bucket: str, key: str) -> dict:
     store = get_object_store()
     raw = store.get_object(key)
     trip = json.loads(raw)
-
-    events = detect_events(trip["samples"])
-    trip_risk_score = compute_risk_score(events)
-    trip_counts = summarize_events(events)
     stats = _trip_stats(trip)
 
     with db.get_connection() as conn:
+        # Umbrales propios del vehículo (RPM/velocidad/marcha) — ver la
+        # tabla `trucks` y risk_rules.DEFAULT_VEHICLE. Si el truck_id no
+        # está en el catálogo, get_truck() devuelve None y detect_events()
+        # cae a los valores genéricos, sin romper el procesamiento.
+        vehicle = db.get_truck(conn, trip["truck_id"])
+        events = detect_events(trip["samples"], vehicle=vehicle)
+        trip_risk_score = compute_risk_score(events)
+        trip_counts = summarize_events(events)
+
         db.ensure_driver(conn, trip["driver_id"], trip.get("driver_name", trip["driver_id"]), trip["truck_id"])
         db.insert_trip(conn, trip, key, stats)
         db.insert_risk_events(conn, trip["trip_id"], trip["driver_id"], events)

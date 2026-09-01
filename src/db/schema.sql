@@ -8,6 +8,26 @@ CREATE TABLE IF NOT EXISTS drivers (
     created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+-- Catálogo de vehículos: cada uno tiene sus propios umbrales de detección
+-- (un diésel pesado y un bencinero liviano se comportan muy distinto en
+-- RPM normal, velocidad máxima aplicable, y razón RPM/velocidad esperada
+-- en marcha correcta). NO se declara como FOREIGN KEY desde drivers/trips
+-- a propósito: un truck_id que no esté en este catálogo (datos de prueba,
+-- un vehículo nuevo aún no cargado) no debe romper el pipeline — ver
+-- src/common/db.py::get_truck() y DEFAULT_VEHICLE en risk_rules.py, que
+-- cubren ese caso con valores de respaldo.
+CREATE TABLE IF NOT EXISTS trucks (
+    truck_id            TEXT PRIMARY KEY,
+    label               TEXT NOT NULL,     -- descriptivo para el dashboard, ej. "Diésel pesado (tipo Volvo FH)"
+    fuel_type           TEXT NOT NULL,     -- 'diesel' | 'gasoline'
+    vehicle_class       TEXT NOT NULL,     -- 'heavy' | 'light'
+    max_rpm_normal      INTEGER NOT NULL,      -- umbral de exceso de RPM para ESTE vehículo
+    max_speed_kmh       NUMERIC(6,2) NOT NULL, -- límite de velocidad aplicable a este vehículo/ruta
+    rpm_per_kmh_min     NUMERIC(6,2) NOT NULL, -- razón RPM/velocidad esperada en marcha correcta (mínimo)
+    rpm_per_kmh_max     NUMERIC(6,2) NOT NULL, -- razón RPM/velocidad esperada en marcha correcta (máximo)
+    created_at          TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
 CREATE TABLE IF NOT EXISTS trips (
     trip_id         TEXT PRIMARY KEY,
     driver_id       TEXT NOT NULL REFERENCES drivers(driver_id),
@@ -31,12 +51,12 @@ CREATE TABLE IF NOT EXISTS risk_events (
     event_id        BIGSERIAL PRIMARY KEY,
     trip_id         TEXT NOT NULL REFERENCES trips(trip_id),
     driver_id       TEXT NOT NULL REFERENCES drivers(driver_id),
-    event_type      TEXT NOT NULL,   -- harsh_braking | aggressive_acceleration | excessive_rpm | excessive_temp
+    event_type      TEXT NOT NULL,   -- harsh_braking | aggressive_acceleration | excessive_rpm | excessive_temp | excessive_speed | gear_mismatch
     severity        TEXT NOT NULL,   -- low | medium | high
     event_time      TIMESTAMPTZ NOT NULL,
-    value            NUMERIC(10,3),  -- valor que disparó el evento (ej. deceleración en m/s2)
-    threshold        NUMERIC(10,3),  -- umbral configurado para ese tipo de evento
-    details         JSONB,
+    value            NUMERIC(10,3),  -- valor que disparó el evento (significado distinto según event_type)
+    threshold        NUMERIC(10,3),  -- umbral configurado para ese tipo de evento (propio del vehículo cuando aplica)
+    details         JSONB,           -- evento completo tal como lo arma risk_rules.py (duración, pico alcanzado, etc.)
     created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
@@ -53,6 +73,8 @@ CREATE TABLE IF NOT EXISTS driver_risk_scores (
     aggressive_accel_count      INTEGER NOT NULL DEFAULT 0,
     excessive_rpm_count         INTEGER NOT NULL DEFAULT 0,
     excessive_temp_count        INTEGER NOT NULL DEFAULT 0,
+    excessive_speed_count       INTEGER NOT NULL DEFAULT 0,
+    gear_mismatch_count         INTEGER NOT NULL DEFAULT 0,
     risk_score      NUMERIC(6,2) NOT NULL DEFAULT 0,  -- 0-100
     last_updated    TIMESTAMPTZ NOT NULL DEFAULT now(),
     PRIMARY KEY (driver_id, period_start, period_end)
@@ -76,3 +98,16 @@ INSERT INTO drivers (driver_id, full_name, truck_id) VALUES
     ('DRV-003', 'Carlos Rojas',   'TRK-03'),
     ('DRV-004', 'Nicolas A.',     'TRK-04')
 ON CONFLICT (driver_id) DO NOTHING;
+
+-- Catálogo de vehículos de ejemplo: 2 diésel pesados + 2 bencineros
+-- livianos, para que el dashboard muestre contraste real entre
+-- categorías. Las etiquetas mencionan un modelo de referencia SOLO como
+-- descripción ilustrativa de la categoría (diésel/pesado vs.
+-- bencina/liviano) — los valores numéricos son representativos del rubro,
+-- no una ficha técnica exacta de fábrica.
+INSERT INTO trucks (truck_id, label, fuel_type, vehicle_class, max_rpm_normal, max_speed_kmh, rpm_per_kmh_min, rpm_per_kmh_max) VALUES
+    ('TRK-01', 'Diésel pesado (tipo Volvo FH)',       'diesel',   'heavy', 2500, 100, 25, 45),
+    ('TRK-02', 'Bencinero liviano (furgón de reparto)', 'gasoline', 'light', 6000, 120, 45, 80),
+    ('TRK-03', 'Diésel pesado (tipo Scania R)',        'diesel',   'heavy', 2600, 100, 25, 45),
+    ('TRK-04', 'Bencinero liviano (camioneta de reparto)', 'gasoline', 'light', 5800, 110, 45, 80)
+ON CONFLICT (truck_id) DO NOTHING;

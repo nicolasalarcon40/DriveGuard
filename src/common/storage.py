@@ -68,12 +68,13 @@ class LocalObjectStore(ObjectStore):
         return (self.root / key).read_bytes()
 
     def list_objects(self, prefix: str = "") -> list[str]:
-        base = self.root / prefix
-        if not base.exists():
-            return []
+        # .as_posix() (no str()) a propósito: en Windows, Path usa "\" como
+        # separador, pero las keys de S3 (y el prefijo que recibe esta
+        # función) siempre usan "/" — sin esto, list_objects() nunca
+        # encuentra nada en Windows aunque los archivos sí existan.
         return [
-            str(p.relative_to(self.root)) for p in self.root.rglob("*")
-            if p.is_file() and str(p.relative_to(self.root)).startswith(prefix)
+            p.relative_to(self.root).as_posix() for p in self.root.rglob("*")
+            if p.is_file() and p.relative_to(self.root).as_posix().startswith(prefix)
         ]
 
 

@@ -67,6 +67,15 @@ def generate_trip(driver_id: str, duration_minutes: int | None = None) -> dict:
     engine_temp = 20.0  # arranca en frío
     samples = []
 
+    # "excessive_speed" y "gear_mismatch" son eventos POR TRAMO (duran
+    # varios segundos seguidos), a diferencia de los otros cuatro, que son
+    # puntuales (un instante). Por eso se simulan como un tramo continuo
+    # con este pequeño estado, en vez de un solo valor extremo en 1 muestra
+    # — ver risk_rules.MIN_EPISODE_DURATION_S, que de otro modo descartaría
+    # el evento por "ruido de un instante".
+    episode_type = None
+    episode_remaining = 0
+
     for i in range(n_samples):
         t = start_time + timedelta(seconds=i / SAMPLE_HZ)
 
@@ -75,28 +84,42 @@ def generate_trip(driver_id: str, duration_minutes: int | None = None) -> dict:
         target_speed = max(0, target_speed)
         speed += (target_speed - speed) * 0.05
 
-        risk_roll = random.random()
         event_injected = None
 
-        if risk_roll < profile["risk"] / 1200:  # eventos son raros por segundo
-            event_type = random.choice(
-                ["harsh_braking", "aggressive_acceleration", "excessive_rpm", "excessive_temp"]
-            )
-            if event_type == "harsh_braking" and speed > 30:
-                speed = max(0, speed - random.uniform(28, 45))  # caída brusca de velocidad
-                event_injected = event_type
-            elif event_type == "aggressive_acceleration":
-                speed = min(120, speed + random.uniform(25, 40))
-                event_injected = event_type
-            elif event_type == "excessive_rpm":
-                event_injected = event_type  # se refleja abajo al calcular rpm
-            elif event_type == "excessive_temp":
-                event_injected = event_type  # se refleja abajo al calcular temp
+        if episode_remaining > 0:
+            event_injected = episode_type
+            episode_remaining -= 1
+        else:
+            risk_roll = random.random()
+            if risk_roll < profile["risk"] / 1200:  # eventos son raros por segundo
+                event_type = random.choice([
+                    "harsh_braking", "aggressive_acceleration",
+                    "excessive_rpm", "excessive_temp",
+                    "excessive_speed", "gear_mismatch",
+                ])
+                if event_type == "harsh_braking" and speed > 30:
+                    event_injected = event_type
+                elif event_type in ("aggressive_acceleration", "excessive_rpm", "excessive_temp"):
+                    event_injected = event_type
+                elif event_type in ("excessive_speed", "gear_mismatch"):
+                    # tramo de 5 a 18 segundos (esta muestra + 4-17 más)
+                    episode_type = event_type
+                    episode_remaining = random.randint(4, 17)
+                    event_injected = event_type
+
+        if event_injected == "harsh_braking":
+            speed = max(0, speed - random.uniform(28, 45))  # caída brusca de velocidad
+        elif event_injected == "aggressive_acceleration":
+            speed = min(120, speed + random.uniform(25, 40))
+        elif event_injected == "excessive_speed":
+            speed = random.uniform(130, 150)  # muy por sobre el límite de cualquier vehículo del catálogo
 
         # -- RPM: función de la velocidad + marcha simulada, con ruido --
         base_rpm = 600 + speed * 22 + random.uniform(-80, 80)
         if event_injected == "excessive_rpm":
             base_rpm = random.uniform(3100, 3800)
+        elif event_injected == "gear_mismatch":
+            base_rpm = speed * random.uniform(85, 105)  # muy desproporcionado a la velocidad actual
 
         # -- Temperatura del motor: sube y se estabiliza ~92-98C --
         target_temp = 95 + random.uniform(-2, 2)

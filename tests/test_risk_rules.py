@@ -8,6 +8,8 @@ debe) probar exhaustivamente.
 """
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
+
 from src.processing.risk_rules import (
     AGGRESSIVE_ACCEL_THRESHOLD_KMH_S,
     EXCESSIVE_RPM_THRESHOLD,
@@ -15,20 +17,24 @@ from src.processing.risk_rules import (
     HARSH_BRAKING_THRESHOLD_KMH_S,
     compute_risk_score,
     compute_score_from_counts,
+    describe_event,
     detect_events,
     summarize_events,
 )
 
+_BASE_TIME = datetime(2026, 1, 1, tzinfo=timezone.utc)
+
 
 def _sample(t, speed=70.0, rpm=1800, temp=90.0, lat=None, lon=None):
+    timestamp = (_BASE_TIME + timedelta(seconds=t)).isoformat()
     return {
-        "timestamp": t, "speed_kmh": speed, "rpm": rpm,
+        "timestamp": timestamp, "speed_kmh": speed, "rpm": rpm,
         "engine_temp_c": temp, "lat": lat, "lon": lon,
     }
 
 
 # --------------------------------------------------------------------------
-# detect_events
+# detect_events — eventos puntuales (sin pasar `vehicle`, usan DEFAULT_VEHICLE)
 # --------------------------------------------------------------------------
 def test_no_events_on_smooth_driving():
     samples = [_sample(i, speed=70 + (i % 3)) for i in range(30)]
@@ -101,6 +107,81 @@ def test_missing_speed_samples_do_not_crash_delta_detection():
 
 
 # --------------------------------------------------------------------------
+# detect_events — eventos por tramo: exceso de velocidad y descalce de marcha
+# --------------------------------------------------------------------------
+def test_no_excessive_speed_below_vehicle_limit():
+    samples = [_sample(i, speed=95.0) for i in range(10)]
+    events = detect_events(samples, vehicle={"max_speed_kmh": 100.0})
+    assert not any(e["event_type"] == "excessive_speed" for e in events)
+
+
+def test_detects_sustained_excessive_speed_with_duration():
+    samples = [_sample(i, speed=120.0) for i in range(8)]  # 8s seguidos sobre 100 km/h
+    events = detect_events(samples, vehicle={"max_speed_kmh": 100.0})
+    speed_events = [e for e in events if e["event_type"] == "excessive_speed"]
+    assert len(speed_events) == 1
+    assert speed_events[0]["duration_s"] >= 7.0
+    assert speed_events[0]["peak_speed_kmh"] == 120.0
+
+
+def test_brief_speed_spike_is_ignored_as_noise():
+    # Solo 1 segundo sobre el límite: por debajo de MIN_EPISODE_DURATION_S,
+    # se descarta como ruido de sensor en vez de un evento real.
+    samples = [_sample(0, speed=70.0), _sample(1, speed=150.0), _sample(2, speed=70.0)]
+    events = detect_events(samples, vehicle={"max_speed_kmh": 100.0})
+    assert not any(e["event_type"] == "excessive_speed" for e in events)
+
+
+def test_detects_gear_mismatch_too_high_ratio():
+    # RPM muy alto para la velocidad (marcha muy baja) durante varios segundos.
+    samples = [_sample(i, speed=40.0, rpm=4000) for i in range(6)]
+    vehicle = {"rpm_per_kmh_min": 20.0, "rpm_per_kmh_max": 55.0}
+    events = detect_events(samples, vehicle=vehicle)
+    mismatches = [e for e in events if e["event_type"] == "gear_mismatch"]
+    assert len(mismatches) == 1
+    assert "alta" in mismatches[0]["direction"]
+
+
+def test_gear_mismatch_ignored_below_min_speed_for_ratio_check():
+    # A velocidades muy bajas (ralentí/detenido) no se evalúa la razón.
+    samples = [_sample(i, speed=5.0, rpm=4000) for i in range(6)]
+    events = detect_events(samples, vehicle={"rpm_per_kmh_min": 20.0, "rpm_per_kmh_max": 55.0})
+    assert not any(e["event_type"] == "gear_mismatch" for e in events)
+
+
+def test_vehicle_thresholds_override_defaults():
+    # Un umbral de RPM más permisivo (bencinero) no debe disparar exceso de
+    # RPM donde uno más estricto (diésel) sí lo haría.
+    samples = [_sample(0, rpm=4000)]
+    diesel_events = detect_events(samples, vehicle={"max_rpm_normal": 2900})
+    gasoline_events = detect_events(samples, vehicle={"max_rpm_normal": 6000})
+    assert any(e["event_type"] == "excessive_rpm" for e in diesel_events)
+    assert not any(e["event_type"] == "excessive_rpm" for e in gasoline_events)
+
+
+# --------------------------------------------------------------------------
+# describe_event
+# --------------------------------------------------------------------------
+def test_describe_event_for_all_types_returns_nonempty_string():
+    samples = [_sample(i, speed=120.0, rpm=4000) for i in range(6)]
+    events = detect_events(samples, vehicle={
+        "max_speed_kmh": 100.0, "rpm_per_kmh_min": 20.0, "rpm_per_kmh_max": 55.0, "max_rpm_normal": 6500,
+    })
+    assert events  # exceso de velocidad y/o descalce de marcha detectados
+    for e in events:
+        description = describe_event(e)
+        assert isinstance(description, str) and len(description) > 0
+
+
+def test_describe_event_mentions_duration_for_speed_violation():
+    samples = [_sample(i, speed=130.0) for i in range(10)]
+    events = detect_events(samples, vehicle={"max_speed_kmh": 100.0})
+    speed_event = next(e for e in events if e["event_type"] == "excessive_speed")
+    description = describe_event(speed_event)
+    assert "segundos" in description and "100" in description
+
+
+# --------------------------------------------------------------------------
 # summarize_events
 # --------------------------------------------------------------------------
 def test_summarize_events_counts_by_type():
@@ -113,6 +194,8 @@ def test_summarize_events_counts_by_type():
     assert counts["excessive_rpm_count"] == 1
     assert counts["aggressive_accel_count"] == 0
     assert counts["excessive_temp_count"] == 0
+    assert counts["excessive_speed_count"] == 0
+    assert counts["gear_mismatch_count"] == 0
     assert counts["total_events"] == 2
 
 
