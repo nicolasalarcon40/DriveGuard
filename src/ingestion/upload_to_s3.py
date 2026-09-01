@@ -27,6 +27,8 @@ from pathlib import Path
 
 from src.common.storage import get_object_store
 
+from src.common.config import settings
+
 DATA_DIR = Path(__file__).resolve().parents[2] / "data" / "raw_trips"
 UPLOADED_MARKER_SUFFIX = ".uploaded"
 
@@ -86,10 +88,19 @@ def main():
         print("No hay viajes pendientes por subir.")
         return
 
-    for f in files:
-        upload_file(f, invoke_processor=not args.no_process)
+        # En modo AWS, la llegada del objeto a S3 ya dispara la Lambda real (ver
+    # infra/main.tf) — invocar también el handler acá duplicaría el
+    # procesamiento del mismo viaje. Solo se simula la invocación localmente
+    # en modo local, que es donde no existe ese trigger real.
+    should_invoke_locally = settings.deployment_mode == "local" and not args.no_process
 
-    print(f"\n{len(files)} viaje(s) subido(s) y procesado(s).")
+    for f in files:
+        upload_file(f, invoke_processor=should_invoke_locally)
+
+    if should_invoke_locally:
+        print(f"\n{len(files)} viaje(s) subido(s) y procesado(s) (localmente).")
+    else:
+        print(f"\n{len(files)} viaje(s) subido(s). El procesamiento lo dispara la Lambda real en AWS — revisa CloudWatch Logs.")
 
 
 if __name__ == "__main__":
